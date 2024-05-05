@@ -420,6 +420,7 @@ CMakeFiles/MyProject.dir/main.cpp.o: ../main.cpp \
   /usr/local/include/opencv4/opencv2/video.hpp \
   /usr/local/include/opencv4/opencv2/video/tracking.hpp \
   /usr/local/include/opencv4/opencv2/video/background_segm.hpp \
+  /usr/local/include/opencv4/opencv2/tracking/tracking.hpp \
   /usr/local/include/opencv4/opencv2/tracking.hpp \
   /usr/include/c++/11/filesystem \
   /usr/include/c++/11/bits/fs_fwd.h \
@@ -436,6 +437,8 @@ CMakeFiles/MyProject.dir/main.cpp.o: ../main.cpp \
 /usr/include/c++/11/filesystem:
 
 /usr/local/include/opencv4/opencv2/tracking.hpp:
+
+/usr/local/include/opencv4/opencv2/tracking/tracking.hpp:
 
 /usr/local/include/opencv4/opencv2/video/tracking.hpp:
 

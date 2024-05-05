@@ -1,5 +1,5 @@
 CMakeFiles/MyProject.dir/main.cpp.o: \
- /home/jaxe/Repositories/proj_viscomp/main.cpp /usr/include/stdc-predef.h \
+ /home/jaxe/Repositories/viscomp_proj/main.cpp /usr/include/stdc-predef.h \
  /usr/local/include/opencv4/opencv2/opencv.hpp \
  /usr/local/include/opencv4/opencv2/opencv_modules.hpp \
  /usr/local/include/opencv4/opencv2/core.hpp \
