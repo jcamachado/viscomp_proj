@@ -1,0 +1,3 @@
+/home/jaxe/Repositories/proj_viscomp/build/CMakeFiles/MyProject.dir
+/home/jaxe/Repositories/proj_viscomp/build/CMakeFiles/edit_cache.dir
+/home/jaxe/Repositories/proj_viscomp/build/CMakeFiles/rebuild_cache.dir
