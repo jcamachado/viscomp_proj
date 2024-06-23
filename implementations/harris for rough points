@@ -1,0 +1,99 @@
+#include <opencv2/opencv.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/objdetect.hpp>
+#include <opencv2/tracking/tracking.hpp>
+#include <filesystem>
+#include <vector>
+#include <thread>
+
+#define VIDEO_DIR "videos/"
+
+void updateTracker(cv::Ptr<cv::TrackerKCF> tracker, cv::Mat& frame) {
+    cv::Rect bbox;
+    if (tracker->update(frame, bbox)) {
+        cv::rectangle(frame, bbox, cv::Scalar(0, 0, 255), 2);
+    }
+}
+
+int main() {
+    std::filesystem::path current_file_path(__FILE__);
+    std::filesystem::path video_dir = current_file_path.parent_path() / VIDEO_DIR;
+
+    cv::VideoCapture cap((video_dir / "sample2.mp4").string());
+    if (!cap.isOpened()) {
+        std::cout << "Cannot open video file: " << std::endl;
+        return -1;
+    }
+    int frame_num = 0;
+
+    double fps = cap.get(cv::CAP_PROP_FPS);
+    int delay = cvRound(1000.0 / fps);
+
+    while (true) {
+        cap.set(cv::CAP_PROP_POS_FRAMES, 0);
+
+        while (true) {
+            frame_num++;
+            cv::Mat frame;
+            cap >> frame;
+            if (frame.empty()) {
+                break;
+            }
+            std::cout << "Frame number: " << frame_num << std::endl;
+
+            cv::Mat gray;
+            cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+
+            cv::Mat dst, dst_norm, dst_norm_scaled;
+            dst = cv::Mat::zeros(frame.size(), CV_32FC1);
+
+            int blockSize = 2;
+            int apertureSize = 3;
+            double k = 0.04;
+
+            cv::cornerHarris(gray, dst, blockSize, apertureSize, k);
+
+            cv::normalize(dst, dst_norm, 0, 255, cv::NORM_MINMAX, CV_32FC1, cv::Mat());
+            cv::convertScaleAbs(dst_norm, dst_norm_scaled);
+
+            cv::Mat points;
+            for (int i = 0; i < dst_norm.rows; i++) {
+                for (int j = 0; j < dst_norm.cols; j++) {
+                    if ((int) dst_norm.at<float>(i, j) > 125) {
+                        points.push_back(cv::Point2f(j, i));
+                    }
+                }
+            }
+
+            int clusterCount = 10;
+            cv::Mat labels;
+            cv::Mat centers;
+            cv::kmeans(points, clusterCount, labels, cv::TermCriteria(cv::TermCriteria::EPS+cv::TermCriteria::COUNT, 10, 1.0), 3, cv::KMEANS_PP_CENTERS, centers);
+
+            std::vector<cv::Ptr<cv::TrackerKCF>> trackers;
+            for (int i = 0; i < centers.rows; i++) {
+                cv::Ptr<cv::TrackerKCF> tracker = cv::TrackerKCF::create();
+                cv::Rect2d bbox(centers.at<float>(i, 0) - 10, centers.at<float>(i, 1) - 10, 20, 20);
+                tracker->init(frame, bbox);
+                trackers.push_back(tracker);
+            }
+
+            std::vector<std::thread> threads;
+            for (size_t i = 0; i < trackers.size(); ++i) {
+                threads.push_back(std::thread(updateTracker, trackers[i], std::ref(frame)));
+            }
+
+            for (auto& thread : threads) {
+                thread.join();
+            }
+
+            cv::imshow("Video", frame);
+            if (cv::waitKey(delay) >= 0) {
+                return 0;
+            }
+        }
+    }
+
+    return 0;
+}
