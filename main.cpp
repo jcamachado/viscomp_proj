@@ -5,9 +5,21 @@
 #include <opencv2/tracking/tracking.hpp>
 #include <filesystem>
 #include <vector>
+#include <thread>
 
 #define VIDEO_DIR "videos/"
 
+void updateTracker(cv::Ptr<cv::TrackerKCF> tracker, cv::Mat& frame) {
+    cv::Rect bbox;
+    if (tracker->update(frame, bbox)) {
+        cv::rectangle(frame, bbox, cv::Scalar(0, 0, 255), 2);
+    }
+}
+
+
+// todo Kalman para fundo
+// Non max suppression
+// Mean shifting
 int main() {
     std::filesystem::path current_file_path(__FILE__);
     std::filesystem::path video_dir = current_file_path.parent_path() / VIDEO_DIR;
@@ -19,21 +31,18 @@ int main() {
     }
     int frame_num = 0;
 
-    // Create HOG descriptor and detector
     cv::HOGDescriptor hog;
-    // TODO Customize the people detector for improved accuracy
     hog.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
 
-    // Frame rate of the video
     double fps = cap.get(cv::CAP_PROP_FPS);
-    int delay = cvRound(100.0 / fps);
+    int delay = cvRound(1000.0 / fps);
 
-    while (true) {  // Outer loop for playing the video in a loop
-        cap.set(cv::CAP_PROP_POS_FRAMES, 0);  // Reset the video to the first frame
+    std::vector<cv::Ptr<cv::TrackerKCF>> trackers;
 
-        //TODO improve tracking accuracy and performance
-        //TODO add id to each tracked person
-        while (true) {  // Inner loop for playing the video
+    while (true) {
+        cap.set(cv::CAP_PROP_POS_FRAMES, 0);
+
+        while (true) {
             frame_num++;
             cv::Mat frame;
             cap >> frame;
@@ -42,36 +51,32 @@ int main() {
             }
             std::cout << "Frame number: " << frame_num << std::endl;
 
-            // Detect people in the current frame
-            std::vector<cv::Rect> detections;
-            std::vector<double> weights;
-            hog.detectMultiScale(frame, detections, weights);
+            // Perform detection only on every third frame
+            if (frame_num % 3 == 1) {
+                std::vector<cv::Rect> detections;
+                std::vector<double> weights;
+                hog.detectMultiScale(frame, detections, weights);
 
-            if (detections.empty()) {
-                std::cout << "No people detected in the image." << std::endl;
-            }
-
-            // Initialize a tracker for each person
-            std::vector<cv::Ptr<cv::TrackerKCF>> trackers;
-            for (const auto& detection : detections) {
-                cv::Ptr<cv::TrackerKCF> tracker = cv::TrackerKCF::create();
-                tracker->init(frame, detection);
-                trackers.push_back(tracker);
-            }
-
-            // Update each tracker and draw the bounding box
-            for (size_t i = 0; i < trackers.size(); ++i) {
-                cv::Rect bbox;
-                if (trackers[i]->update(frame, bbox)) {
-                    cv::rectangle(frame, bbox, cv::Scalar(0, 0, 255), 2);
+                // Clear existing trackers and initialize new ones for the detected objects
+                trackers.clear();
+                for (const auto& detection : detections) {
+                    cv::Ptr<cv::TrackerKCF> tracker = cv::TrackerKCF::create();
+                    tracker->init(frame, detection);
+                    trackers.push_back(tracker);
                 }
             }
 
+            // Update trackers in every frame
+            for (auto& tracker : trackers) {
+                updateTracker(tracker, frame);
+            }
+
             cv::imshow("Video", frame);
-            if (cv::waitKey(delay) >= 0) {  // Delay for maintaining the original frame rate
-                return 0;  // Exit the program if the user presses a key
+            if (cv::waitKey(delay) >= 0) {
+                break; // Exit the inner loop to finish the program
             }
         }
+        break; // Exit the outer loop to finish the program
     }
 
     return 0;
