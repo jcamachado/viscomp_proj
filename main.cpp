@@ -4,136 +4,185 @@
 #include <opencv2/objdetect.hpp>
 #include <opencv2/tracking/tracking.hpp>
 #include <filesystem>
+#include <random>
 #include <vector>
 #include <thread>
 #include "utils.cpp"
 
 #define VIDEO_DIR "videos/"
-
-
-
+#define file_name "sample2.mp4"
 
 // todo Kalman para fundo
 // Non max suppression
-// Mean shifting
-int main() {
+int main()
+{
     std::filesystem::path current_file_path(__FILE__);
     std::filesystem::path video_dir = current_file_path.parent_path() / VIDEO_DIR;
 
-    cv::VideoCapture cap((video_dir / "sample2.mp4").string());
-    if (!cap.isOpened()) {
+    cv::VideoCapture cap((video_dir / file_name).string());
+    if (!cap.isOpened())
+    {
         std::cout << "Cannot open video file: " << std::endl;
         return -1;
     }
     int frame_num = 0;
-    int frame_skip = 1;
+    int frame_skip = 3;
 
     cv::HOGDescriptor hog;
     hog.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
 
-    double fps = cap.get(cv::CAP_PROP_FPS);
+    double fps = cap.get(cv::CAP_PROP_FPS); // Get the frames per seconds of the video
     int delay = cvRound(1000.0 / fps);
 
     std::vector<cv::Ptr<cv::TrackerKCF>> trackers;
+    std::map<cv::Ptr<cv::TrackerKCF>, int> trackerIds;
+    cv::Ptr<cv::TrackerKCF> tracker;
+    std::default_random_engine generator;
+    std::uniform_int_distribution<int> distribution(1, 10000); // range of random numbers
 
-    while (true) {
+    cv::Mat frame, currentFrame;
+    // cv::Mat previousFrame, diffFrame;
+    // std::vector<std::vector<cv::Point>> contours; // Find contours in the difference frame
+    std::vector<cv::Rect> detections;
+    std::vector<double> weights;
+    int nextID = 1;
+
+    while (true)
+    {
         cap.set(cv::CAP_PROP_POS_FRAMES, 0); // Reset the video to the beginning
-        cv::Mat frame, currentFrame, previousFrame, diffFrame;
-        // Find contours in the difference frame
-        // std::vector<std::vector<cv::Point>> contours;
 
-        while (true) {
-            cap >> frame; // Get a new frame from the camera
+        while (true)
+        {
+            cap >> frame; // Get new frame
             frame_num++;
-            std::cout << "Frame number: " << frame_num << std::endl;
-            if (frame.empty()) break;
+            std::cout << "Starting Frame: " << frame_num << std::endl;
+            if (frame.empty())
+            {
+                break;
+            }
 
-            // Perform detection only on every third frame
-            if (frame_num % frame_skip == 0) {
-                // Upscale the frame to detect smaller objects
-                double scale = 2.0; // Experiment with this value
-                cv::Mat resizedFrame;
-                cv::resize(frame, resizedFrame, cv::Size(), scale, scale);
+            /*
+                Start Detection
+            */
+            if (frame_num % frame_skip == 0)
+            {
+                improveConstrast(currentFrame);
+                currentFrame = frame.clone(); // Frame but editable
+                /*
+                    Upscale the frame to detect smaller objects
+                */
+                double scale = 1.0;
+                // cv::resize(currentFrame, currentFrame, cv::Size(), scale, scale);
 
+                /*
+                    subtract the gaussian blurred previous frame from the
+                    current frame keeping the n channels
+                */
+                // if (!previousFrame.empty())
+                // {
+                // cv::Mat blurredFrame;
+                // cv::GaussianBlur(previousFrame, blurredFrame, cv::Size(11, 11), 0);
+                // cv::absdiff(currentFrame, blurredFrame, diffFrame);
+                // currentFrame = diffFrame.clone();
 
-                // // Set diffFrame to black
-                // if (frame_num == 1) {
-                //     currentFrame = frame.clone();
-                //     previousFrame = currentFrame.clone();
-                //     continue;
+                // hog.detectMultiScale(
+                //     diffFrame,        // image
+                //     motionDetections, // detections
+                //     motionWeights, 0, // weights and threshold
+                //     cv::Size(4, 4),   // winStride, increased for speed
+                //     cv::Size(32, 32), // padding, reduced to balance speed and detection at edges
+                //     1.05,             // scale, slightly adjusted for more layers without much speed loss
+                //     2,                // finalThreshold, kept the same
+                //     false             // useMeanshiftGrouping, set to false for speed, if accuracy is not heavily impacted
+                // );
                 // }
-                // currentFrame = frame.clone();
-                // // Subtract the current frame from the previous frame
-                // subtractFrames(previousFrame, currentFrame, diffFrame);
-                // previousFrame = currentFrame.clone();
 
-                std::vector<cv::Rect> detections;
-                // std::vector<cv::Rect> motionDetections;
-                std::vector<double> weights;
-                // std::vector<double> motionWeights;
+                // Detection step
+                if (detections.empty()) // Simplified condition for demonstration
+                {
+                    hog.detectMultiScale(
+                        currentFrame,     // image
+                        detections,       // detections
+                        weights, 0,       // weights and threshold
+                        cv::Size(4, 4),   // winStride, increased for speed
+                        cv::Size(32, 32), // padding, reduced to balance speed and detection at edges
+                        1.05,             // scale, slightly adjusted for more layers without much speed loss
+                        2,                // finalThreshold
+                        false             // useMeanshiftGrouping, set to false for speed, if accuracy is not heavily impacted
+                    );
 
-                
-                hog.detectMultiScale(
-                    resizedFrame,  // image
-                    detections,     // detections
-                    weights, 0,     // weights
-                    cv::Size(4,4),     // winStride
-                    cv::Size(32,32),     // padding a better value is
-                    1.05, 2, true   // scale, finalThreshold, useMeanshiftGrouping
-                );
+                    // detections = combineDetections(detections, motionDetections); // combine the detections from the motion and the hog detector
 
-                // std::vector<cv::KalmanFilter> kalmanFilters;
+                    removeOuterRects(detections);
+                    mergeCloseRectangles(detections);
 
-                // remove fully overlapping rectangles, remove the larger one
-                removeOuterRects(detections);
+                    trackers.clear();
 
-                for(auto& detection : detections) {
-                    for(auto& detection2 : detections) {
-                        if (detection == detection2) continue;
-                        // if rectangule 1 is inside rectangle 2, remove rectangle 2
-                        if (detection.x >= detection2.x && detection.y >= detection2.y && detection.x + detection.width <= detection2.x + detection2.width && detection.y + detection.height <= detection2.y + detection2.height) {
-                            detections.erase(std::remove(detections.begin(), detections.end(), detection2), detections.end());
+                    for (auto &detection : detections)
+                    {
+                        int uniqueId = nextID++;
+                        detection.x /= scale;
+                        detection.y /= scale;
+                        detection.width /= scale;
+                        detection.height /= scale;
+
+                        tracker = cv::TrackerKCF::create();
+                        tracker->init(frame, detection);
+                        trackers.push_back(tracker);
+
+                        trackerIds[tracker] = uniqueId; // Associate the tracker with its unique ID
+                    }
+                }
+                else
+                {
+                    // Update existing trackers
+                    std::vector<int> idsToRemove;
+                    for (auto &tracker : trackers)
+                    {
+                        cv::Rect bbox;
+                        if (tracker->update(frame, bbox))
+                        {
+                            cv::rectangle(frame, bbox, cv::Scalar(0, 0, 255), 2);
+                            putText(frame, std::to_string(trackerIds[tracker]), cv::Point(bbox.x, bbox.y - 10), cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(255, 0, 0), 2);
+                        }
+                        else
+                        {
+                            idsToRemove.push_back(trackerIds[tracker]);
+                        }
+                    }
+
+                    // Remove trackers that failed to update
+                    for (int idToRemove : idsToRemove)
+                    {
+                        for (auto it = trackers.begin(); it != trackers.end();)
+                        {
+                            if (trackerIds[*it] == idToRemove)
+                            {
+                                trackerIds.erase(*it);   // Corrected to remove using the tracker as the key
+                                it = trackers.erase(it); // Erase the tracker and update the iterator
+                            }
+                            else
+                            {
+                                ++it;
+                            }
                         }
                     }
                 }
 
-                trackers.clear();
-                for (auto& detection : detections) {
-                    detection.x /= scale;
-                    detection.y /= scale;
-                    detection.width /= scale;
-                    detection.height /= scale;
-                    // cv::rectangle(frame, cv::Point(detection.x, detection.y), cv::Point(detection.x + detection.width, detection.y + detection.height), cv::Scalar(255, 0, 0), 2);
-
-                    cv::Ptr<cv::TrackerKCF> tracker = cv::TrackerKCF::create();
-                    tracker->init(frame, detection);
-                    trackers.push_back(tracker);
-                    // Initialize Kalman filter for each detection
-                    // cv::KalmanFilter kf;
-                    // initializeKalmanFilter(kf, detection.x, detection.y);
-                    // kalmanFilters.push_back(kf);
-                    
-                }
-
-                // Predict the next state of the Kalman filter
-                // for (auto& kf : kalmanFilters) {
-                //     cv::Point prediction = predictKalmanFilter(kf);
-                //     cv::circle(frame, prediction, 4, cv::Scalar(0, 255, 0), -1);
-                // }
-                for (auto& tracker : trackers) {
-                    updateTracker(tracker, frame);
-                }
+                // previousFrame = currentFrame.clone();
             }
-            // Update trackers in every frame
-            for (auto& tracker : trackers) {
-                updateTracker(tracker, frame);
+            for (auto &tracker : trackers)
+            {
+                updateTracker(trackerIds[tracker], tracker, frame); // Update trackers in every frame
             }
             cv::imshow("Video", frame);
-            if (cv::waitKey(delay) >= 0) {
-                break; // Exit the inner loop to finish the program
+            if (cv::waitKey(delay) >= 0)
+            {
+                break;
             }
+            std::cout << "Ending frame: " << frame_num << std::endl;
         }
-        break; // Exit the outer loop to finish the program
+        break;
     }
 
     return 0;
