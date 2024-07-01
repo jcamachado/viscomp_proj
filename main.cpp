@@ -11,6 +11,7 @@
 
 #define VIDEO_DIR "videos/"
 #define file_name "sample2.mp4"
+// #define file_name "sample1.wmv"
 
 // todo Kalman para fundo
 // Non max suppression
@@ -26,7 +27,7 @@ int main()
         return -1;
     }
     int frame_num = 0;
-    int frame_skip = 3;
+    int frame_skip = 5;
 
     cv::HOGDescriptor hog;
     hog.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
@@ -37,15 +38,27 @@ int main()
     std::vector<cv::Ptr<cv::TrackerKCF>> trackers;
     std::map<cv::Ptr<cv::TrackerKCF>, int> trackerIds;
     cv::Ptr<cv::TrackerKCF> tracker;
-    std::default_random_engine generator;
-    std::uniform_int_distribution<int> distribution(1, 10000); // range of random numbers
+    // std::default_random_engine generator;
+    // std::uniform_int_distribution<int> distribution(1, 10000); // range of random numbers
 
+    /*
+        frame = original frame to be read from the video
+        editedFrame = frame preprocessed to improve detections, not displayed, no rect drawn
+        currentFrame = frame edited to be displayed (with detections and tracking)
+        previousFrame = frame from the previous iteration
+        diffFrame = difference between the current frame and the previous frame
+
+    */
     cv::Mat frame, currentFrame;
-    // cv::Mat previousFrame, diffFrame;
-    // std::vector<std::vector<cv::Point>> contours; // Find contours in the difference frame
+    cv::Mat previousFrame, diffFrame, editedFrame, sobelFrame;
+    std::vector<std::vector<cv::Point>> contours; // Find contours in the difference frame
     std::vector<cv::Rect> detections;
+    std::vector<cv::Rect> motionDetections = {}; // Empty to concat with hog detections
     std::vector<double> weights;
+    std::vector<double> motionWeights;
     int nextID = 1;
+    double scale = 1.0;
+    bool meanshift = false;
 
     while (true)
     {
@@ -62,119 +75,125 @@ int main()
             }
 
             /*
-                Start Detection
+                Preprocess the frame to improve detections
             */
             if (frame_num % frame_skip == 0)
             {
-                improveConstrast(currentFrame);
-                currentFrame = frame.clone(); // Frame but editable
-                /*
-                    Upscale the frame to detect smaller objects
-                */
-                double scale = 1.0;
-                // cv::resize(currentFrame, currentFrame, cv::Size(), scale, scale);
+                scale = 1.0;
+                meanshift = true;
+                editedFrame = frame.clone();
+                // cv::Sobel(frame, sobelFrame, -1, 1, 1);
+                // editedFrame = sobelFrame.clone();
 
                 /*
-                    subtract the gaussian blurred previous frame from the
-                    current frame keeping the n channels
+                    - Upscale the frame
+                    - Apply Gaussian blur
+                    - Apply Sobel filter
+                    - Sum filtered frames
+                    - Improve contrast
+                    - Find contours
+
                 */
+                improveConstrast(editedFrame);
+                cv::resize(editedFrame, editedFrame, cv::Size(), scale, scale);
+
                 // if (!previousFrame.empty())
                 // {
-                // cv::Mat blurredFrame;
-                // cv::GaussianBlur(previousFrame, blurredFrame, cv::Size(11, 11), 0);
-                // cv::absdiff(currentFrame, blurredFrame, diffFrame);
-                // currentFrame = diffFrame.clone();
+                //     cv::resize(previousFrame, previousFrame, cv::Size(), scale, scale);
+                //     cv::GaussianBlur(previousFrame, previousFrame, cv::Size(11, 11), 0);
+                //     cv::absdiff(editedFrame, previousFrame, diffFrame);
+                //     cv::resize(diffFrame, diffFrame, cv::Size(), 1.0 / scale, 1.0 / scale);
+                //     // cv::imshow("Sobel", sobelFrame);
+                //     // cv::imshow("Diff", diffFrame);
+                //     // sum sobel and diff
+                //     cv::GaussianBlur(diffFrame, diffFrame, cv::Size(5, 5), 0);
+                //     // cv::imshow("Gaussian", diffFrame);
+                //     cv::addWeighted(sobelFrame, 0.8, diffFrame, 0.8, 0, diffFrame);
+                //     // sum again to improve line strength
+                //     cv::addWeighted(sobelFrame, 0.8, diffFrame, 0.8, 0, diffFrame);
+                //     // improve line strength
+                //     // cv::threshold(diffFrame, diffFrame, 50, 255, cv::THRESH_BINARY);
+                //     // cv::imshow("Sum", diffFrame);
+                //     // cv::erode(diffFrame, diffFrame, cv::Mat(), cv::Point(-1, -1), 2);
+                //     // cv::dilate(diffFrame, diffFrame, cv::Mat(), cv::Point(-1, -1), 2);
+                //     editedFrame = diffFrame.clone();
+                //     myFindContours(editedFrame, contours);
+                //     myDrawContours(editedFrame, contours);
+                //     // sum editedFrame and diffFrame
+                //     cv::addWeighted(editedFrame, 0.6, diffFrame, 0.9, 0, editedFrame);
+                //     // cv::imshow("Edited", editedFrame);
+                //     cv::resize(editedFrame, editedFrame, cv::Size(), scale, scale);
+                // }
+                currentFrame = editedFrame.clone();
 
+                /*
+                    Start Detection
+                */
+            }
+            if (frame_num % frame_skip == 0)
+            {
+
+                /*
+                    Detection from difference frame
+                */
                 // hog.detectMultiScale(
                 //     diffFrame,        // image
                 //     motionDetections, // detections
                 //     motionWeights, 0, // weights and threshold
-                //     cv::Size(4, 4),   // winStride, increased for speed
-                //     cv::Size(32, 32), // padding, reduced to balance speed and detection at edges
+                //     cv::Size(8, 8),   // winStride, increased for speed
+                //     cv::Size(16, 16), // padding, reduced to balance speed and detection at edges
                 //     1.05,             // scale, slightly adjusted for more layers without much speed loss
                 //     2,                // finalThreshold, kept the same
                 //     false             // useMeanshiftGrouping, set to false for speed, if accuracy is not heavily impacted
                 // );
-                // }
 
-                // Detection step
-                if (detections.empty()) // Simplified condition for demonstration
+                hog.detectMultiScale(
+                    currentFrame,     // image
+                    detections,       // detections
+                    weights, 0,       // weights and threshold
+                    cv::Size(4, 4),   // winStride, increased for speed
+                    cv::Size(32, 32), // padding, reduced to balance speed and detection at edges
+                    1.05,             // scale, slightly adjusted for more layers without much speed loss
+                    2,                // finalThreshold
+                    true              // useMeanshiftGrouping, set to false for speed, if accuracy is not heavily impacted
+                );
+
+                // hog.detectMultiScale(
+                //     currentFrame, // image
+                //     detections,   // detections
+                //     weights, 0,   // weights and threshold
+                //     cv::Size(),   // winStride, increased for speed
+                //     cv::Size()    // padding, reduced to balance speed and detection at edges
+                // );
+
+                // mergeDetections(detections, motionDetections); // combine the detections from the motion and the hog detector
+
+                removeOuterRects(detections);
+                mergeCloseRectangles(detections);
+
+                trackers.clear();
+
+                for (auto &detection : detections)
                 {
-                    hog.detectMultiScale(
-                        currentFrame,     // image
-                        detections,       // detections
-                        weights, 0,       // weights and threshold
-                        cv::Size(4, 4),   // winStride, increased for speed
-                        cv::Size(32, 32), // padding, reduced to balance speed and detection at edges
-                        1.05,             // scale, slightly adjusted for more layers without much speed loss
-                        2,                // finalThreshold
-                        false             // useMeanshiftGrouping, set to false for speed, if accuracy is not heavily impacted
-                    );
+                    int uniqueId = nextID++;
+                    detection.x /= scale;
+                    detection.y /= scale;
+                    detection.width /= scale;
+                    detection.height /= scale;
 
-                    // detections = combineDetections(detections, motionDetections); // combine the detections from the motion and the hog detector
+                    tracker = cv::TrackerKCF::create();
+                    tracker->init(frame, detection);
+                    trackers.push_back(tracker);
 
-                    removeOuterRects(detections);
-                    mergeCloseRectangles(detections);
-
-                    trackers.clear();
-
-                    for (auto &detection : detections)
-                    {
-                        int uniqueId = nextID++;
-                        detection.x /= scale;
-                        detection.y /= scale;
-                        detection.width /= scale;
-                        detection.height /= scale;
-
-                        tracker = cv::TrackerKCF::create();
-                        tracker->init(frame, detection);
-                        trackers.push_back(tracker);
-
-                        trackerIds[tracker] = uniqueId; // Associate the tracker with its unique ID
-                    }
+                    // trackerIds[tracker] = uniqueId; // Associate the tracker with its unique ID
                 }
-                else
-                {
-                    // Update existing trackers
-                    std::vector<int> idsToRemove;
-                    for (auto &tracker : trackers)
-                    {
-                        cv::Rect bbox;
-                        if (tracker->update(frame, bbox))
-                        {
-                            cv::rectangle(frame, bbox, cv::Scalar(0, 0, 255), 2);
-                            putText(frame, std::to_string(trackerIds[tracker]), cv::Point(bbox.x, bbox.y - 10), cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(255, 0, 0), 2);
-                        }
-                        else
-                        {
-                            idsToRemove.push_back(trackerIds[tracker]);
-                        }
-                    }
-
-                    // Remove trackers that failed to update
-                    for (int idToRemove : idsToRemove)
-                    {
-                        for (auto it = trackers.begin(); it != trackers.end();)
-                        {
-                            if (trackerIds[*it] == idToRemove)
-                            {
-                                trackerIds.erase(*it);   // Corrected to remove using the tracker as the key
-                                it = trackers.erase(it); // Erase the tracker and update the iterator
-                            }
-                            else
-                            {
-                                ++it;
-                            }
-                        }
-                    }
-                }
-
-                // previousFrame = currentFrame.clone();
             }
+            previousFrame = frame.clone();
             for (auto &tracker : trackers)
             {
                 updateTracker(trackerIds[tracker], tracker, frame); // Update trackers in every frame
             }
+
             cv::imshow("Video", frame);
             if (cv::waitKey(delay) >= 0)
             {

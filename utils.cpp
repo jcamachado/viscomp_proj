@@ -37,10 +37,11 @@ cv::Point getAverageCenter(const cv::Rect &rect1, const cv::Rect &rect2)
 // check if 2 rectangles are almost overlapping by 3 pixels
 bool isOverlapping(const cv::Rect &rect1, const cv::Rect &rect2)
 {
+    int margin = 10;
     return rect1.x >= rect2.x &&
            rect1.y >= rect2.y &&
-           rect1.x + rect1.width - 3 <= rect2.x + rect2.width &&
-           rect1.y + rect1.height - 3 <= rect2.y + rect2.height;
+           rect1.x + rect1.width - margin <= rect2.x + rect2.width &&
+           rect1.y + rect1.height - margin <= rect2.y + rect2.height;
 }
 
 // if rectangles are almost overlapping by 3 pixels, merge the 2 rectangles
@@ -135,8 +136,8 @@ void removeOuterRects(std::vector<cv::Rect> &rects)
             // if rectangule 1 is inside rectangle 2, remove rectangle 2
             if (detection.x >= detection2.x &&
                 detection.y >= detection2.y &&
-                detection.x + detection.width - 3 <= detection2.x + detection2.width &&
-                detection.y + detection.height - 3 <= detection2.y + detection2.height)
+                detection.x + detection.width - 10 <= detection2.x + detection2.width &&
+                detection.y + detection.height - 10 <= detection2.y + detection2.height)
             {
                 rects.erase(std::remove(rects.begin(), rects.end(), detection2), rects.end());
             }
@@ -144,46 +145,61 @@ void removeOuterRects(std::vector<cv::Rect> &rects)
     }
 }
 
-std::vector<cv::Rect> combineDetections(
-    const std::vector<cv::Rect> &detections,
-    const std::vector<cv::Rect> &motionDetections)
+void mergeDetections(std::vector<cv::Rect> &detections, const std::vector<cv::Rect> &motionDetections)
 {
-    std::vector<cv::Rect> comboDetections(detections.begin(), detections.end());
-    comboDetections.insert(comboDetections.end(), motionDetections.begin(), motionDetections.end());
-
-    // Assuming each detection is equally important, assign a constant score
-    std::vector<float> scores(comboDetections.size(), 1.0f); // Example score
-
-    float score_threshold = 0.5; // Example threshold
-    float nms_threshold = 0.5;   // Example threshold
-    std::vector<int> indices;
-
-    // Apply non-maximum suppression
-    cv::dnn::NMSBoxes(comboDetections, scores, score_threshold, nms_threshold, indices);
-
-    std::vector<cv::Rect> resultDetections;
-    for (int idx : indices)
+    for (const auto &detection : motionDetections)
     {
-        resultDetections.push_back(comboDetections[idx]);
+        detections.push_back(detection);
     }
-
-    return resultDetections;
 }
 
-void drawContours(cv::Mat &frame, const std::vector<std::vector<cv::Point>> &contours)
+// Identify the contours in the frame
+void myFindContours(cv::Mat &frame, std::vector<std::vector<cv::Point>> &contours)
 {
-    // Create a blank image with the same dimensions as the frame
-    cv::Mat contoursImage = cv::Mat::zeros(frame.size(), frame.type());
+    cv::Mat gray, edged;
+    // Convert to grayscale
+    cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    // Apply Canny edge detection or another binarization method
+    cv::Canny(gray, edged, 100, 200); // These thresholds can be adjusted based on your specific needs
 
+    // Use the binary image for finding contours
+    findContours(edged, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+}
+
+// Draw the contours on the frame from points
+void myDrawContours(cv::Mat &frame, const std::vector<std::vector<cv::Point>> &contours)
+{
+    // Create a temporary vector of vectors to hold each contour
+    std::vector<std::vector<cv::Point>> tempContours;
+
+    // Since the original function seems to be designed to handle individual points as contours,
+    // we need to adapt it to the expected input of cv::drawContours by wrapping each point in a vector.
     for (const auto &contour : contours)
     {
-        cv::Rect boundingBox = cv::boundingRect(contour);
-        // Draw the bounding box on the contoursImage instead of the frame
-        cv::rectangle(contoursImage, boundingBox, cv::Scalar(0, 255, 0), 2);
+        // Wrap the individual contour point in a vector
+        std::vector<cv::Point> tempContour = {contour};
+
+        // Add the wrapped contour to the collection of contours
+        tempContours.push_back(tempContour);
     }
+
+    // Now, draw each contour on the frame
+    // Note: The third parameter is the contour index. To draw all contours, it is set to -1.
+    cv::drawContours(frame, tempContours, -1, cv::Scalar(0, 255, 0), 2);
+
+    // imshow
+    // cv::imshow("Contours", frame);
 }
 
-// Kalman Filter
+// void myDrawContours(cv::Mat &frame, const std::vector<cv::Rect> &detections)
+// {
+//     for (const auto &detection : detections)
+//     {
+//         cv::rectangle(frame, detection, cv::Scalar(0, 255, 0), 2);
+//     }
+// }
+
+// Kalman Filter // Reference unused
 class KalmanFilter
 {
 public:
@@ -232,27 +248,41 @@ public:
 private:
     cv::KalmanFilter kf;
 };
-
-// Tracker
-class Tracker
-{
-public:
-    Tracker(cv::Ptr<cv::TrackerKCF> tracker)
-    {
-        this->tracker = tracker;
-    }
-
-    void update(cv::Mat &frame)
-    {
-        cv::Rect bbox;
-        // Print values for frame
-        if (tracker->update(frame, bbox))
+/*
+    Reference for id tracking
+    for (auto &detection : detections)
         {
-            cv::rectangle(frame, bbox, cv::Scalar(0, 0, 255), 2);
-            // remove overlapping rectangles
-        }
-    }
+            bool matched = false;
+            for (auto &[id, tracker] : trackers)
+            {
+                cv::Rect2d bbox;
+                if (tracker->update(frame, bbox))
+                {
+                    if ((cv::Rect(bbox) & detection).area() > 0) // Simple intersection check
+                    {
+                        matched = true;
+                        break;
+                    }
+                }
+            }
 
-private:
-    cv::Ptr<cv::TrackerKCF> tracker;
-};
+            if (!matched)
+            {
+                auto tracker = cv::TrackerKCF::create();
+                tracker->init(frame, cv::Rect2d(detection));
+                trackers[nextID++] = tracker;
+            }
+        }
+
+        // Draw tracked objects
+        for (auto &[id, tracker] : trackers)
+        {
+            cv::Rect2d bbox;
+            if (tracker->update(frame, bbox))
+            {
+                cv::rectangle(frame, bbox, cv::Scalar(255, 0, 0), 2);
+                cv::putText(frame, std::to_string(id), cv::Point(bbox.x, bbox.y - 10), cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(255, 255, 255), 2);
+            }
+        }
+
+*/
